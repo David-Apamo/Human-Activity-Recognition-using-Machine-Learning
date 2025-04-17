@@ -13,11 +13,11 @@ The aim is to reduce the dimensionality of the data, and train a classification 
 
 ## Key Processes
 * Data Preprocessing: This processes involved cleaning and scaling the data for PCA, and reducing the data dimensionality using PCA.
-* Model Training: This phase involved training and tuning the various Classification models mentioned with cross-validation to control overfitting, and evaluating the performance of the models trained across the cross-validation folds.
+* Model Training: This phase involved training and tuning the various Classification models mentioned, with cross-validation to control overfitting, and evaluating the performance of the models trained across the cross-validation folds.
 * Model Evaluation and Validation: The best performing model (SVM) was used to make predictions on test data, and a confusion matrix was used to calculate various evaluation metrics like Accuracy, Sensitivity and Precision.
 
 ## Results
 The best model (SVM) had a validation accuracy of 81.79%. The model also had good Precision for five of the classes i.e. LAYING (0.82), SITTING (0.82), STANDING (0.83), WALKING (0.81), and WALKING UPSTAIRS (0.84), which was impressive.
 
 ## Tools and Libraries
-RStudio (tidyverse, caret, parallel, parallelMap). Please install the specified packages prior to running the R markdown. Running the markdown will take a few hours. I've uploaded the knitted pdf version of the markdown file.
+RStudio (tidyverse, caret, parallel, parallelMap). Please install the specified packages prior to running the R markdown. Note that running the markdown will take a few hours. I've uploaded the knitted pdf version of the markdown file.
