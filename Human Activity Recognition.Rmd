@@ -1,0 +1,261 @@
+---
+title: "Human Activity Recognition Using Machine Learning"
+author: "David Owuor"
+date: "`r Sys.Date()`"
+output: word_document
+---
+
+# Introduction
+
+This is a case study for Human Activity Recognition using data collected by smart devices (smartphones and smart watches). The experiments were done on volunteers within an age bracket of 19-48 years. Each person performed six different activities (WALKING, WALKING_UPSTAIRS, WALKING_DOWNSTAIRS, SITTING, STANDING, LAYING) while wearing a smartphone on the waist. These smart devices contain two key types of sensors i.e. Accelerometer and Gyroscope capable of measuring the body orientation and motion in reference to the ground. Accelerometer measures triaxial acceleration and the estimated body acceleration while gyroscope measures triaxial angular velocity. The data for the experiment was collected by these smart devices and sent to remote cloud servers. The downloaded data was provided by New England College (USA) in their Machine Learning Course.
+
+The aim is to reduce the dimensionality of the data, then train a classification model that can accurately identify the activity being performed.
+
+```{r}
+# Load packages
+suppressPackageStartupMessages(
+  {
+    library(tidyverse)
+    library(caret)
+    library(parallel)
+    library(parallelMap)
+  }
+)
+```
+
+```{r}
+# Import data
+HumanActivityRecognition <- read_csv("HumanActivityRecognition.csv")
+```
+
+The data has 10297 observations of 564 variables. The target variable Activity is of character type, while the rest of the variables are all numeric.
+
+```{r}
+# View the first few observations
+head(HumanActivityRecognition)
+```
+
+The first column contains the row numbers. All the predictors are numeric and most have values ranging between -1 and 1. Feature scaling won't be very necessary, but will be done because the variables have different variances.
+
+## Data Cleaning
+
+Data cleaning will involve assessing the data for missing values and duplicated entries.
+
+```{r}
+# Check for missing values
+sum(is.na(HumanActivityRecognition))
+```
+
+The data has no missing values.
+
+```{r}
+# Check for duplicated observations
+sum(duplicated(HumanActivityRecognition))
+```
+
+There are no duplicated observations in the data as well. I'll now convert the target variable into a nominal factor as needed for classification algorithms.
+
+```{r}
+# Convert the target variable Activity into a factor
+HumanActivityRecognition$Activity <- factor(HumanActivityRecognition$Activity)
+
+# Table frequencies of the target class labels
+table(HumanActivityRecognition$Activity)
+```
+
+Laying had the most activities, followed by standing, sitting, walking, walking upstairs and walking downstairs respectively. There is class imbalance in the data, but not so high. The data is so large, making it difficult to perform EDA. So I'll go directly to dimensionality reduction and model training.
+
+# Dimensionality Reduction
+
+I'll use PCA for dimensionality reduction. PCA requires all the variable to be numeric, so I'll omit the target variable Activity from PCA. I'll also omit the first variable containing the row numbers, and the second last variable (y) which contains value labels for the target. PCA also requires feature scaling. If features are not scaled, those with larger variances will dominate the principal components.
+
+```{r}
+# Perform variable selection for PCA (Omit the first variable, y and Activity)
+x <- HumanActivityRecognition[, -c(1,563,564)]
+# Scale the data
+x_scaled <- scale(x, center = TRUE, scale = TRUE)
+```
+
+```{r}
+# Perform PCA
+pca <- princomp(x_scaled)
+```
+
+Principal Components are contained in the object named scores, and can be accessed by *$scores*.
+
+```{r}
+# Get the variance explained by each principal component
+variance_explained <- ((pca$sdev ^ 2)/(sum(pca$sdev ^ 2)))
+```
+
+```{r}
+# Create a scree plot of the variance explained by each Principal Component 
+qplot(c(1:561), variance_explained) + geom_line() + ylim(0,1) + 
+  labs(title = "Scree plot", x = "Principal Component", 
+       y = "Variance Explained")
+```
+
+The first principal component explains the maximum variance in the data (about 50%), followed by the second, third and so on.. From the plot, most of the principal components have variance explained close to zero. I'll compute the cumulative variance explained to help me decide on the number of principal components to retain.
+
+```{r}
+# Get the cumulative variance explained
+cumulative_var_explained <- cumsum(variance_explained)
+
+# Plot the cumulative variance explained
+plot(cumulative_var_explained, type = "b", 
+     xlab = "Number of Components", 
+     ylab = "Cumulative Variance Explained", 
+     main = "Plot of Cumulative Variance Explained")
+```
+
+The first 100 principal components seem to have a cumulative variance explained of about 90%, implying that these 100 PCs explains most of the variability in the data. I'll retain principal components with explains at most 95% of the variance.
+
+```{r}
+## Get the number of PCs to retain, based on cumulative variance explained
+
+# Retain components with cumulative variance <= 0.95
+num_components <- which(cumulative_var_explained <= 0.95)
+
+# Extract the retained Principal Components from PCA results
+selectedPC_scores <- pca$scores[ ,num_components]
+
+# Get the dimension of the extracted Principal Components data
+dim(selectedPC_scores)
+```
+
+103 principal components that explain 95% of the total variability in the data have been retained. PCA has indeed helped in reducing the dimension of the data from 561 to 103 features. I'll now use these retained PCs to train my classification models.
+
+```{r}
+# Convert the selected Principal Component scores into a data frame
+selectedPC_scores <- as.data.frame(selectedPC_scores)
+# Add a column for the target variable
+selectedPC_scores <- selectedPC_scores |> 
+  mutate(Activity = HumanActivityRecognition$Activity)
+```
+
+# Data Partitioning
+
+The data is large and I'll partition it into into training and test sets, using 70/30 split. That is, 70% of the data will be allocated for model training, and the remaining 30% will be used for model evaluation.
+
+```{r}
+## Partition the data into training and test sets
+
+# Set random seed for reproducibility
+set.seed(105)
+# partition the data
+train_index <- createDataPartition(selectedPC_scores$Activity, p = 0.70, list = FALSE)
+# Assign 70% to training set
+training_data <- selectedPC_scores[train_index,]
+# Assign training set the remaining 30%
+test_data <- selectedPC_scores[-train_index,]
+```
+
+Training set has 7211 instances, while test set has 3086 instances.
+
+# Model Training
+
+I'll try 6 algorithms (QDA, KNN, RF, SVM, Neural Net and XGBoost). Even if the dimensionality of the data was reduced by PCA, the data is still large and I will not tune all the hyperparameters for each and every model due to the limited computational resources I have. I'll utilize all the available CPU cores to perform parallel processing in order to speed up the model training process.
+
+```{r}
+# Set-up the test harness to use 7-fold cross validation
+train_control <- trainControl(method = "cv", number = 7)
+```
+
+```{r}
+# Begin parallelization
+parallelStartSocket(cpus = detectCores())
+```
+
+```{r}
+## Train the models
+
+# QDA
+set.seed(105) # Random seed number for reproducibility
+# train the model
+fit.qda <- train(Activity ~ ., data = training_data, method = "qda", 
+                   trControl = train_control) # QDA has no hyperparameter to tune
+
+# KNN
+set.seed(105)
+fit.knn <- train(Activity ~ ., data = training_data, method = "knn", 
+                 trControl = train_control, tuneLength = 10)
+
+## Random Forest
+set.seed(105)
+fit.rf <- train(Activity ~ ., data = training_data, method = "rf", 
+                trControl = train_control, tuneLength = 5)
+
+## SVM
+set.seed(105)
+fit.svm <- train(Activity ~ ., data = training_data, method = "svmRadial", 
+                 trControl = train_control, tuneLength = 5)
+
+## Neural Net
+set.seed(105)
+fit.nnet <- train(Activity ~ ., data = training_data, method = "nnet", 
+                  trControl = train_control, tuneLength = 5, trace = FALSE)
+
+## XGBoost
+set.seed(105)
+fit.xgb <- train(Activity ~ ., data = training_data, method = "xgbTree", 
+                  trControl = train_control)
+
+```
+
+I used the same seed number to ensure that the results can be directly compared.
+
+```{r}
+# stop parallelization
+parallelStop()
+```
+
+## Model Evaluation
+
+```{r}
+# Put the fitted models into a list
+results <- resamples(list(QDA = fit.qda, KNN = fit.knn, RF = fit.rf, 
+                          SVM = fit.svm, NNet = fit.nnet, XGBoost = fit.xgb))
+# Generate summary statistics of accuracy across each model
+summary(results)
+```
+
+SVM performs best with a training accuracy of 80.23%.
+
+```{r}
+# Plot results to compare accuracy of models
+dotplot(results)
+```
+
+SVM and KNN produced more stable results across the cross-validation folds as compared to the other models.
+
+## Model Validation
+
+I'll use the best performing model (which is SVM) to make predictions on test set and evaluate how the model performs on new data.
+
+```{r}
+# Make predictions on test dataset
+svm_preds <- predict(fit.svm, newdata = test_data)
+```
+
+```{r}
+# Create a confusion matrix to see how the model performs on new data
+confusionMatrix(test_data$Activity, svm_preds)
+```
+
+The model has a validation accuracy of 81.79%, which is good. The model also has high Precision for five of the classes i.e. LAYING (0.82), SITTING (0.82), STANDING (0.83), WALKING (0.81), and WALKING UPSTAIRS (0.84), which is impressive.
+
+# Real-World Applications of the Human Activity Recognition Models
+
+The Human Activity Recognition (HAR) model, trained on sensor data such as accelerometers and gyroscopes, have numerous practical applications across various domains;
+
+* In Fitness and Health Tracking to monitor daily activity and estimate energy expenditure.
+* In Elderly Care to detect sudden falls or abnormal inactivity, and alert caregivers or emergency services, enabling timely intervention and improved elderly safety.
+* In Rehabilitation and Remote Health Monitoring to monitor prescribed physical therapy exercises and assist physiotherapists in evaluating patients remotely.
+* In Sports to track and analyze athletic movement patterns and help in preventing injuries.
+* In Industrial settings to detect unsafe behaviors and help to reduce risk and improve safety compliance.
+
+## Limitations of this Analysis
+
+* The model is unable to train with real time data, and will need to be updated when new data comes in.
+* I did not tune all the model hyperparameters due to the limited computational resources, and maybe I did not obtain the optimal results. The model can still be improved upon.
+* Also, some information may have been lost during PCA.
